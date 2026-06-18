@@ -10,7 +10,9 @@ from urllib.parse import urljoin
 import hashlib
 import bencodepy
 from urllib.parse import urlparse
+from dotenv import load_dotenv
 
+load_dotenv()
 import requests
 from bs4 import BeautifulSoup
 
@@ -51,8 +53,8 @@ SOURCES = [
         "tag": "三级伦理",
     },
     {
-        "site": "sexinsex",
-        "url": "https://sexinsex.net/bbs/tag-%25CB%25D8%25C8%25CB.html",
+        "site": "sehuatang",
+        "url": "https://www.sehuatang.org/forum-104-1.html",
         "tag": "素人系列",
     },
 ]
@@ -68,7 +70,7 @@ API_URL = os.getenv(
 )
 COOKIE = os.getenv("cookie", "").strip()
 PROCESSED_FILE = Path("processed_threads.json")
-IMAGE_DIR = Path("images")
+IMAGE_DIR = Path(os.getenv("CRAWLER_IMAGE_PATH", "images"))
 MAGNET_PATTERN = re.compile(
     r"magnet:\?xt=urn:btih:[a-zA-Z0-9]+(?:&[^\s\"'<>]+)*",
     re.IGNORECASE,
@@ -113,17 +115,21 @@ def build_session(site=None):
     session = requests.Session()
     session.headers.update(
         {
-            "User-Agent": (
-                "PASTE_YOUR_BROWSER_USER_AGENT_HERE"
-            ),
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0.0.0 Safari/537.36"
+        ),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
             "Upgrade-Insecure-Requests": "1",
         }
     )
 
-    if site == "sexinsex":
-        session.headers["Referer"] = "https://sexinsex.net/bbs/"
+    if site == "sehuatang":
+        session.headers["Referer"] = "https://www.sehuatang.org/"
+        session.headers["Host"] = "www.sehuatang.org"
+        session.headers["Accept-Language"] = "zh-CN,zh;q=0.9,en;q=0.8"
     elif site == "hjd2048":
         session.headers["Referer"] = "https://hjd2048.com/2048/"
     elif site == "141love":
@@ -133,7 +139,7 @@ def build_session(site=None):
         cookie = os.getenv("cookie1", "").strip()
     elif site == "hjd2048":
         cookie = os.getenv("HJD2048_COOKIE", "").strip()
-    elif site == "sexinsex":
+    elif site == "sehuatang":
         cookie = os.getenv("cookie2", "").strip()
     else:
         cookie = os.getenv("cookie1", "").strip()
@@ -192,7 +198,7 @@ def download_image(session, image_url, thread_id):
     if "thumb-ing.gif" in image_url:
         return ""
 
-    IMAGE_DIR.mkdir(exist_ok=True)
+    IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 
     parsed = urlparse(image_url)
     ext = Path(parsed.path).suffix.lower()
@@ -306,8 +312,13 @@ def download_hjd2048_torrent(session, soup, thread_url):
     torrent_url = urljoin(thread_url, link.get("href"))
     response = session.get(torrent_url, timeout=30)
     response.raise_for_status()
+    content = response.content
 
-    return torrent_bytes_to_magnet(response.content)
+    if not content.startswith(b"d"):
+        return ""
+
+    return torrent_bytes_to_magnet(content)
+
 def extract_hjd2048_publish_time(soup):
     time_element = soup.select_one(".tiptop span[title]")
 
@@ -558,8 +569,8 @@ def crawl_source(source, limit, submit):
         threads = extract_thread_links(listing_html)
     elif source["site"] == "hjd2048":
         threads = extract_hjd2048_thread_links(listing_html, source["url"])
-    elif source["site"] == "sexinsex":
-        threads = extract_sexinsex_thread_links(listing_html, source["url"])
+    elif source["site"] == "sehuatang":
+        threads = extract_sehuatang_thread_links(listing_html, source["url"])
     else:
         print(f"Unknown site: {source['site']}")
         return
@@ -669,7 +680,7 @@ def extract_hjd2048_thread_links(html, source_url):
 
     return list(threads.values())
 
-def extract_sexinsex_thread_links(html, source_url):
+def extract_sehuatang_thread_links(html, source_url):
     soup = BeautifulSoup(html, "html.parser")
     threads = {}
 
@@ -680,14 +691,15 @@ def extract_sexinsex_thread_links(html, source_url):
         if not title:
             continue
 
-        if "thread-" not in href and "viewthread.php" not in href:
-            continue
-
-        match = re.search(r"(?:thread-|tid=)(\d+)", href)
+        match = (
+            re.search(r"thread-(\d+)-\d+-\d+\.html", href)
+            or re.search(r"(?:viewthread\.php\?tid=|tid=)(\d+)", href)
+        )
         if not match:
             continue
 
         thread_id = match.group(1)
+
         threads.setdefault(
             thread_id,
             {
