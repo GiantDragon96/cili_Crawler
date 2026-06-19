@@ -4,3 +4,4 @@ PyMySQL==1.2.0
 requests==2.34.2
 bencodepy==0.9.5
 python-dotenv==1.2.1
+playwright==1.60.0

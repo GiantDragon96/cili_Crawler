@@ -11,6 +11,7 @@ import hashlib
 import bencodepy
 from urllib.parse import urlparse
 from dotenv import load_dotenv
+from playwright.sync_api import sync_playwright
 
 load_dotenv()
 import requests
@@ -65,12 +66,13 @@ SOURCE_URL = (
 )
 SOURCE_TAG = "动漫精品"
 API_URL = os.getenv(
-    "INSERT_CILI_API",
+    "API",
     "http://127.0.0.1:5000/api/sync/insertCili",
 )
 COOKIE = os.getenv("cookie", "").strip()
 PROCESSED_FILE = Path("processed_threads.json")
 IMAGE_DIR = Path(os.getenv("CRAWLER_IMAGE_PATH", "images"))
+PARSED_LOG_FILE = Path("logs/logging.json")
 MAGNET_PATTERN = re.compile(
     r"magnet:\?xt=urn:btih:[a-zA-Z0-9]+(?:&[^\s\"'<>]+)*",
     re.IGNORECASE,
@@ -83,6 +85,7 @@ SIZE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 MAKER_PATTERN = re.compile(r"\[([^\[\]]+)\]")
+BROWSER_VERIFIED = False
 
 REQUIRED_FIELDS = {
     "title",
@@ -116,9 +119,10 @@ def build_session(site=None):
     session.headers.update(
         {
         "User-Agent": (
+
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/126.0.0.0 Safari/537.36"
+            "Chrome/149.0.0.0 Safari/537.36"
         ),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
@@ -155,6 +159,24 @@ def fetch_html(session, url):
     response.encoding = response.apparent_encoding
     return response.text
 
+def fetch_html_with_browser(url):
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False)
+        page = browser.new_page(
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/149.0.0.0 Safari/537.36"
+            )
+        )
+
+        page.goto(url, wait_until="networkidle", timeout=120000)
+
+        input("If Cloudflare/18 page appears, click through it, then press Enter here...")
+
+        html = page.content()
+        browser.close()
+        return html
 
 def extract_thread_links(html):
     soup = BeautifulSoup(html, "html.parser")
@@ -191,7 +213,7 @@ def extract_first_image(soup, thread_url):
             return urljoin(thread_url, src)
     return ""
     
-def download_image(session, image_url, thread_id):
+def download_image(session, image_url, thread_id, referer_url=""):
     if not image_url:
         return ""
 
@@ -208,20 +230,91 @@ def download_image(session, image_url, thread_id):
 
     file_path = IMAGE_DIR / f"{thread_id}{ext}"
 
-    response = session.get(image_url, timeout=30)
-    response.raise_for_status()
+    try:
+        response = session.get(
+            image_url,
+            timeout=30,
+            headers={
+                "User-Agent": session.headers.get("User-Agent", ""),
+                "Referer": referer_url or "https://www.sehuatang.org/",
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            },
+        )
+        response.raise_for_status()
+    except requests.RequestException as error:
+        print(f"Could not download image {image_url}: {error}")
+        return ""
 
     with open(file_path, "wb") as f:
         f.write(response.content)
 
     return str(file_path)
 
+def download_image_with_browser(image_url, thread_id, referer_url=""):
+    if not image_url:
+        return ""
+
+    if "thumb-ing.gif" in image_url:
+        return ""
+
+    IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+
+    parsed = urlparse(image_url)
+    ext = Path(parsed.path).suffix.lower()
+
+    if ext not in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
+        ext = ".jpg"
+
+    file_path = IMAGE_DIR / f"{thread_id}{ext}"
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=False)
+            page = browser.new_page(
+                user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/149.0.0.0 Safari/537.36"
+                )
+            )
+
+            if referer_url:
+                page.goto(referer_url, wait_until="networkidle", timeout=120000)
+                input("If Cloudflare/18 page appears, click through it, then press Enter here...")
+                response = page.request.get(
+                    image_url,
+                    headers={
+                        "Referer": referer_url,
+                        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                    },
+                    timeout=120000,
+                )
+
+                if not response.ok:
+                    print(f"Could not download image {image_url}: browser status {response.status}")
+                    browser.close()
+                    return ""
+
+                file_path.write_bytes(response.body())
+            browser.close()
+            return str(file_path)
+
+    except Exception as error:
+        print(f"Could not download image {image_url}: {error}")
+        return ""
+
 def extract_magnet(html):
     match = MAGNET_PATTERN.search(html)
     if match:
         return match.group(0).replace("&amp;", "&")
 
-    info_hash = INFO_HASH_PATTERN.search(BeautifulSoup(html, "html.parser").get_text(" "))
+    text = BeautifulSoup(html, "html.parser").get_text(" ")
+
+    match = MAGNET_PATTERN.search(text)
+    if match:
+        return match.group(0).replace("&amp;", "&")
+
+    info_hash = INFO_HASH_PATTERN.search(text)
     if info_hash:
         return f"magnet:?xt=urn:btih:{info_hash.group(1).lower()}"
 
@@ -337,10 +430,21 @@ def extract_hjd2048_publish_time(soup):
         ).timestamp()
     )
 
+def to_public_image_path(local_path):
+    if not local_path:
+        return ""
+
+    return f"/sehuatang/img/{Path(local_path).name}"
+
 def parse_thread(session, thread, tag=SOURCE_TAG):
-    html = fetch_html(session, thread["url"])
+    if "sehuatang.org" in thread["url"]:
+        html = fetch_html_with_browser(thread["url"])
+    else:
+        html = fetch_html(session, thread["url"])
+
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text("\n", strip=True)
+
     title_element = soup.select_one("#thread_subject")
     page_title = title_element.get_text(strip=True) if title_element else ""
 
@@ -357,10 +461,16 @@ def parse_thread(session, thread, tag=SOURCE_TAG):
 
     post = soup.select_one(".t_f, .pcb, .postmessage")
     content = post.get_text("\n", strip=True) if post else text[:3000]
-    images = extract_images(post, thread["url"], limit=1)
 
+    images = extract_images(post, thread["url"], limit=1)
     cover_url = images[0] if images else ""
-    local_cover = download_image(session, cover_url, thread["thread_id"])
+
+    if "sehuatang.org" in thread["url"]:
+        local_cover = download_image_with_browser(cover_url, thread["thread_id"], thread["url"])
+        public_cover = to_public_image_path(local_cover)
+    else:
+        local_cover = download_image(session, cover_url, thread["thread_id"], thread["url"])
+        public_cover = to_public_image_path(local_cover)
 
     return {
         "title": title,
@@ -368,9 +478,9 @@ def parse_thread(session, thread, tag=SOURCE_TAG):
         "magnet_url": magnet_url,
         "filename": thread["thread_id"],
         "actors": "",
-        "content": content[:10000],
-        "thumb": cover_url,
-        "cover": cover_url,
+        "content": content,
+        "thumb": public_cover,
+        "cover": public_cover,
         "series": "",
         "publish_time": extract_publish_time(soup),
         "sub_tag": extract_sub_tags(title, content),
@@ -379,7 +489,7 @@ def parse_thread(session, thread, tag=SOURCE_TAG):
         "collect_page": thread["url"],
         "size": extract_size(content),
     }
-    
+
 def parse_hjd2048_thread(session, thread, tag):
     html = fetch_html(session, thread["url"])
     soup = BeautifulSoup(html, "html.parser")
@@ -411,6 +521,7 @@ def parse_hjd2048_thread(session, thread, tag):
 
     cover_url = images[0] if images else ""
     local_cover = download_image(session, cover_url, thread["thread_id"])
+    public_cover = to_public_image_path(local_cover)
 
     magnet_url = extract_magnet(html)
     if not magnet_url:
@@ -426,8 +537,8 @@ def parse_hjd2048_thread(session, thread, tag):
         "filename": thread["thread_id"],
         "actors": "",
         "content": content[:10000],
-        "thumb": cover_url,
-        "cover": cover_url,
+        "thumb": public_cover,
+        "cover": public_cover,
         "series": "",
         "publish_time": extract_hjd2048_publish_time(soup),
         "sub_tag": extract_sub_tags(title, content),
@@ -556,11 +667,33 @@ def crawl(limit, submit):
 
         time.sleep(random.uniform(2, 5))
 
+def log_parsed_payload(payload):
+    PARSED_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    records = []
+
+    if PARSED_LOG_FILE.exists() and PARSED_LOG_FILE.stat().st_size > 0:
+        with PARSED_LOG_FILE.open("r", encoding="utf-8") as log_file:
+            records = json.load(log_file)
+
+    records.append(
+        {
+            "logged_at": datetime.now().isoformat(timespec="seconds"),
+            "payload": payload,
+        }
+    )
+
+    with PARSED_LOG_FILE.open("w", encoding="utf-8") as log_file:
+        json.dump(records, log_file, ensure_ascii=False, indent=2)
+
 def crawl_source(source, limit, submit):
     session = build_session(source["site"])
 
     try:
-        listing_html = fetch_html(session, source["url"])
+        if source["site"] == "sehuatang":
+            listing_html = fetch_html_with_browser(source["url"])
+        else:
+            listing_html = fetch_html(session, source["url"])
     except requests.RequestException as error:
         print(f"Could not load listing page {source['url']}: {error}")
         return
@@ -582,8 +715,10 @@ def crawl_source(source, limit, submit):
         try:
             if source["site"] == "hjd2048":
                 payload = parse_hjd2048_thread(session, thread, source["tag"])
+                log_parsed_payload(payload)
             else:
                 payload = parse_thread(session, thread, source["tag"])
+                log_parsed_payload(payload)
             validate_payload(payload)
 
             print(f"\nReady: {payload['title']}")
@@ -684,7 +819,7 @@ def extract_sehuatang_thread_links(html, source_url):
     soup = BeautifulSoup(html, "html.parser")
     threads = {}
 
-    for link in soup.select("a[href]"):
+    for link in soup.select("tbody[id^='normalthread_'] a.xst[href]"):
         href = link.get("href", "")
         title = link.get_text(" ", strip=True)
 
