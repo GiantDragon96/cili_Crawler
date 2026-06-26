@@ -161,21 +161,23 @@ def fetch_html(session, url):
 
 def fetch_html_with_browser(url):
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
-        page = browser.new_page(
+        context = p.chromium.launch_persistent_context(
+            user_data_dir="browser_profile/sehuatang",
+            headless=False,
             user_agent=(
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/149.0.0.0 Safari/537.36"
-            )
+            ),
         )
 
+        page = context.new_page()
         page.goto(url, wait_until="networkidle", timeout=120000)
 
         input("If Cloudflare/18 page appears, click through it, then press Enter here...")
 
         html = page.content()
-        browser.close()
+        context.close()
         return html
 
 def extract_thread_links(html):
@@ -269,14 +271,16 @@ def download_image_with_browser(image_url, thread_id, referer_url=""):
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False)
-            page = browser.new_page(
+            context = p.chromium.launch_persistent_context(
+                user_data_dir="browser_profile/sehuatang",
+                headless=False,
                 user_agent=(
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
                     "Chrome/149.0.0.0 Safari/537.36"
-                )
+                ),
             )
+            page = context.new_page()
 
             if referer_url:
                 page.goto(referer_url, wait_until="networkidle", timeout=120000)
@@ -292,12 +296,12 @@ def download_image_with_browser(image_url, thread_id, referer_url=""):
 
                 if not response.ok:
                     print(f"Could not download image {image_url}: browser status {response.status}")
-                    browser.close()
+                    context.close()
                     return ""
 
                 file_path.write_bytes(response.body())
-            browser.close()
-            return str(file_path)
+                context.close()
+                return str(file_path)
 
     except Exception as error:
         print(f"Could not download image {image_url}: {error}")
