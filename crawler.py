@@ -161,23 +161,16 @@ def fetch_html(session, url):
 
 def fetch_html_with_browser(url):
     with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
-            user_data_dir="browser_profile/sehuatang",
-            headless=False,
-            user_agent=(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/149.0.0.0 Safari/537.36"
-            ),
-        )
-
+        browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
+        context = browser.contexts[0]
         page = context.new_page()
-        page.goto(url, wait_until="networkidle", timeout=120000)
+
+        page.goto(url, wait_until="domcontentloaded", timeout=120000)
 
         input("If Cloudflare/18 page appears, click through it, then press Enter here...")
 
         html = page.content()
-        context.close()
+        page.close()
         return html
 
 def extract_thread_links(html):
@@ -271,15 +264,8 @@ def download_image_with_browser(image_url, thread_id, referer_url=""):
 
     try:
         with sync_playwright() as p:
-            context = p.chromium.launch_persistent_context(
-                user_data_dir="browser_profile/sehuatang",
-                headless=False,
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/149.0.0.0 Safari/537.36"
-                ),
-            )
+            browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
+            context = browser.contexts[0]
             page = context.new_page()
 
             if referer_url:
@@ -296,11 +282,11 @@ def download_image_with_browser(image_url, thread_id, referer_url=""):
 
                 if not response.ok:
                     print(f"Could not download image {image_url}: browser status {response.status}")
-                    context.close()
+                    page.close()
                     return ""
 
                 file_path.write_bytes(response.body())
-                context.close()
+                page.close()
                 return str(file_path)
 
     except Exception as error:
