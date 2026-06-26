@@ -182,6 +182,114 @@ rsyncuser@43.225.196.166::mm_caiji/sehuatang/img/
 https://im.2ddvp57bd3.com/sehuatang/img/<filename>
 ```
 
+## Sehuatang 专用运行方式
+
+Sehuatang 有 Cloudflare / 18+ 验证，需要用服务器上的真实 Chrome 来打开页面。
+
+简单理解：
+
+```text
+noVNC = 让我们看到服务器浏览器
+真实 Chrome = 手动过 Sehuatang 验证
+9222 = 让 crawler 连接这个 Chrome
+```
+
+### 1. 启动 noVNC
+
+如果 noVNC 没有运行，在服务器执行：
+
+```bash
+export DISPLAY=:99
+openbox &
+x11vnc -display :99 -forever -shared -rfbport 5900 -noxdamage &
+websockify --web=/usr/share/novnc 6080 localhost:5900 &
+```
+
+检查端口：
+
+```bash
+ss -ltnp | grep -E "5900|6080"
+```
+
+然后在本机浏览器打开：
+
+```text
+http://43.225.196.186:6080/vnc.html
+```
+
+点击 `Connect`。
+
+### 2. 启动真实 Chrome
+
+在服务器另一个终端执行：
+
+```bash
+export DISPLAY=:99
+
+google-chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir=/home/sysmgr/chrome-sehuatang-profile \
+  --no-sandbox \
+  --disable-dev-shm-usage \
+  --new-window https://www.sehuatang.org/forum-104-1.html
+```
+
+说明：
+
+* `9222`：crawler 通过这个端口连接 Chrome。
+* `chrome-sehuatang-profile`：保存 Sehuatang 的 cookie/session。
+* `--new-window`：直接打开 Sehuatang 页面。
+
+### 3. 手动通过验证
+
+在 noVNC 里的 Chrome：
+
+1. 点击 `满18岁 / If you are over 18`
+2. 如果出现 Cloudflare，就等待或手动完成验证
+3. 看到论坛列表页后，再跑 crawler
+
+### 4. 确认 crawler 可以连接 Chrome
+
+在服务器执行：
+
+```bash
+curl http://127.0.0.1:9222/json/version
+```
+
+如果有返回 JSON，表示 Chrome 正常，crawler 可以连接。
+
+### 5. 运行 crawler
+
+不要关闭 Chrome。然后在服务器另一个终端执行：
+
+```bash
+cd ~/Crawler
+git pull
+export DISPLAY=:99
+venv/bin/python crawler.py --all-sources --limit 1 --submit
+```
+
+成功时会看到 需要自己按：
+If Cloudflare/18 page appears, click through it, then press Enter here...
+If Cloudflare/18 page appears, click through it, then press Enter here...
+
+```text
+Source: sehuatang | Tag: 素人系列
+Ready:
+Magnet:
+API response: {'code': 0, ...}
+```
+
+### 6. 同步图片
+
+```bash
+rsync -av --password-file="$HOME/.rsync.pd" \
+/home/Crawler/images/ \
+rsyncuser@43.225.196.166::mm_caiji/sehuatang/img/
+```
+
+注意：跑 Sehuatang 前，一定要先打开真实 Chrome，并确认 `9222` 可用。
+
 ## 常见问题
 
 ### Sehuatang Cloudflare / 18+ 验证
