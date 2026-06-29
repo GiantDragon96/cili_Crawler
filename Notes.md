@@ -216,7 +216,7 @@ ss -ltnp | grep -E "5900|6080"
 ```text
 http://43.225.196.186:6080/vnc.html
 ```
-
+ƒ√
 点击 `Connect`。
 
 ### 2. 启动真实 Chrome
@@ -231,7 +231,7 @@ google-chrome \
   --user-data-dir=/home/sysmgr/chrome-sehuatang-profile \
   --no-sandbox \
   --disable-dev-shm-usage \
-  --new-window https://www.sehuatang.org/forum-104-1.html
+  about:blank
 ```
 
 说明：
