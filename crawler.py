@@ -73,6 +73,7 @@ COOKIE = os.getenv("cookie", "").strip()
 PROCESSED_FILE = Path("processed_threads.json")
 IMAGE_DIR = Path(os.getenv("CRAWLER_IMAGE_PATH", "images"))
 PARSED_LOG_FILE = Path("logs/logging.json")
+STATS_FILE = Path("logs/stats.json")
 MAGNET_PATTERN = re.compile(
     r"magnet:\?xt=urn:btih:[a-zA-Z0-9]+(?:&[^\s\"'<>]+)*",
     re.IGNORECASE,
@@ -624,7 +625,92 @@ def submit_payload(session, payload):
     raise RuntimeError(f"API rejected payload: {result}")
 
 
-def crawl(limit, submit):
+def load_stats():
+    if not STATS_FILE.exists() or STATS_FILE.stat().st_size == 0:
+        return {}
+
+    with STATS_FILE.open("r", encoding="utf-8") as stats_file:
+        return json.load(stats_file)
+
+
+def save_stats(stats):
+    STATS_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    with STATS_FILE.open("w", encoding="utf-8") as stats_file:
+        json.dump(stats, stats_file, ensure_ascii=False, indent=2)
+
+
+def record_stat(stats, site, status):
+    today = datetime.now().strftime("%Y-%m-%d")
+    day_stats = stats.setdefault(
+        today,
+        {
+            "total": 0,
+            "success": 0,
+            "duplicate": 0,
+            "failed": 0,
+            "by_source": {},
+        },
+    )
+    source_stats = day_stats["by_source"].setdefault(
+        site,
+        {
+            "total": 0,
+            "success": 0,
+            "duplicate": 0,
+            "failed": 0,
+        },
+    )
+
+    if status not in {"success", "duplicate", "failed"}:
+        status = "failed"
+
+    day_stats["total"] += 1
+    day_stats[status] += 1
+    source_stats["total"] += 1
+    source_stats[status] += 1
+
+
+def get_result_status(result):
+    if result.get("code") == 0:
+        return "success"
+
+    if result.get("msg") == "Data already exists":
+        return "duplicate"
+
+    return "failed"
+
+
+def print_daily_summary(stats):
+    today = datetime.now().strftime("%Y-%m-%d")
+    day_stats = stats.get(
+        today,
+        {
+            "total": 0,
+            "success": 0,
+            "duplicate": 0,
+            "failed": 0,
+            "by_source": {},
+        },
+    )
+
+    print(f"\n今日统计 ({today})")
+    print(
+        "  总计: {total}  成功: {success}  重复: {duplicate}  失败: {failed}".format(
+            **day_stats
+        )
+    )
+
+    for site, source_stats in day_stats["by_source"].items():
+        print(
+            "  [{site}] 总: {total}  成功: {success}  重复: {duplicate}  失败: {failed}".format(
+                site=site,
+                **source_stats,
+            )
+        )
+
+
+def crawl(limit, submit, stats):
     session = build_session()
     processed = load_processed()
     try:
@@ -648,12 +734,18 @@ def crawl(limit, submit):
             if submit:
                 result = submit_payload(session, payload)
                 print(f"API response: {result}")
+                record_stat(stats, "141love", get_result_status(result))
+                save_stats(stats)
                 processed.add(thread["thread_id"])
                 save_processed(processed)
             else:
                 print(json.dumps(payload, ensure_ascii=False, indent=2))
+                record_stat(stats, "141love", "success")
+                save_stats(stats)
         except (requests.RequestException, PermissionError, ValueError, RuntimeError) as error:
             print(f"Skipped {thread['url']}: {error}")
+            record_stat(stats, "141love", "failed")
+            save_stats(stats)
 
         time.sleep(random.uniform(2, 5))
 
@@ -676,7 +768,7 @@ def log_parsed_payload(payload):
     with PARSED_LOG_FILE.open("w", encoding="utf-8") as log_file:
         json.dump(records, log_file, ensure_ascii=False, indent=2)
 
-def crawl_source(source, limit, submit):
+def crawl_source(source, limit, submit, stats):
     session = build_session(source["site"])
 
     try:
@@ -717,15 +809,21 @@ def crawl_source(source, limit, submit):
             if submit:
                 result = submit_payload(session, payload)
                 print(f"API response: {result}")
+                record_stat(stats, source["site"], get_result_status(result))
+                save_stats(stats)
             else:
                 print(json.dumps(payload, ensure_ascii=False, indent=2))
+                record_stat(stats, source["site"], "success")
+                save_stats(stats)
 
         except (requests.RequestException, PermissionError, ValueError, RuntimeError) as error:
             print(f"Skipped {thread['url']}: {error}")
+            record_stat(stats, source["site"], "failed")
+            save_stats(stats)
 
         time.sleep(random.uniform(2, 5))
 
-def crawl_thread(thread_url, submit):
+def crawl_thread(thread_url, submit, stats):
     match = THREAD_PATTERN.search(thread_url)
     if not match:
         print("Invalid thread URL.")
@@ -748,11 +846,17 @@ def crawl_thread(thread_url, submit):
         if submit:
             result = submit_payload(session, payload)
             print(f"API response: {result}")
+            record_stat(stats, "thread-url", get_result_status(result))
+            save_stats(stats)
         else:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
+            record_stat(stats, "thread-url", "success")
+            save_stats(stats)
 
     except (requests.RequestException, PermissionError, ValueError, RuntimeError) as error:
         print(f"Skipped {thread_url}: {error}")
+        record_stat(stats, "thread-url", "failed")
+        save_stats(stats)
 
 def extract_hjd2048_thread_links(html, source_url):
     soup = BeautifulSoup(html, "html.parser")
@@ -854,13 +958,17 @@ def main():
     help="crawl all configured source URLs",
     )
     args = parser.parse_args()
+    stats = load_stats()
+
     if args.thread_url:
-        crawl_thread(args.thread_url, args.submit)
+        crawl_thread(args.thread_url, args.submit, stats)
     elif args.all_sources:
         for source in SOURCES:
-            crawl_source(source, args.limit, args.submit)
+            crawl_source(source, args.limit, args.submit, stats)
     else:
-        crawl(max(args.limit, 1), args.submit)
+        crawl(max(args.limit, 1), args.submit, stats)
+
+    print_daily_summary(stats)
 
 if __name__ == "__main__":
         main()
