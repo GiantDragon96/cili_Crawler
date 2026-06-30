@@ -4,6 +4,7 @@ import os
 import random
 import re
 import time
+import sys
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urljoin
@@ -67,7 +68,7 @@ SOURCE_URL = (
 SOURCE_TAG = "动漫精品"
 API_URL = os.getenv(
     "API",
-    "http://127.0.0.1:5000/api/sync/insertCili",
+    "http://127.0.0.1:5050/api/sync/insertCili",
 )
 COOKIE = os.getenv("cookie", "").strip()
 PROCESSED_FILE = Path("processed_threads.json")
@@ -105,6 +106,19 @@ REQUIRED_FIELDS = {
     "size",
 }
 
+def send_telegram(message):
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": message},
+            timeout=10,
+        )
+    except requests.RequestException as error:
+        print(f"Telegram notification failed: {error}")
 
 def validate_payload(payload):
     missing = [field for field in REQUIRED_FIELDS if field not in payload]
@@ -167,8 +181,8 @@ def fetch_html_with_browser(url):
         page = context.new_page()
 
         page.goto(url, wait_until="domcontentloaded", timeout=120000)
-
-        input("If Cloudflare/18 page appears, click through it, then press Enter here...")
+        if sys.stdin.isatty():
+            input("If Cloudflare/18 page appears, click through it, then press Enter here...")
 
         html = page.content()
         page.close()
@@ -271,7 +285,8 @@ def download_image_with_browser(image_url, thread_id, referer_url=""):
 
             if referer_url:
                 page.goto(referer_url, wait_until="networkidle", timeout=120000)
-                input("If Cloudflare/18 page appears, click through it, then press Enter here...")
+                if sys.stdin.isatty():
+                    input("If Cloudflare/18 page appears, click through it, then press Enter here...")
                 response = page.request.get(
                     image_url,
                     headers={
@@ -683,31 +698,14 @@ def get_result_status(result):
 
 def print_daily_summary(stats):
     today = datetime.now().strftime("%Y-%m-%d")
-    day_stats = stats.get(
-        today,
-        {
-            "total": 0,
-            "success": 0,
-            "duplicate": 0,
-            "failed": 0,
-            "by_source": {},
-        },
-    )
-
-    print(f"\n今日统计 ({today})")
-    print(
-        "  总计: {total}  成功: {success}  重复: {duplicate}  失败: {failed}".format(
-            **day_stats
-        )
-    )
-
+    day_stats = stats.get(today, {"total": 0, "success": 0, "duplicate": 0, "failed": 0, "by_source": {}})
+    lines = [f"\n今日统计 ({today})"]
+    lines.append("  总计: {total}  成功: {success}  重复: {duplicate}  失败: {failed}".format(**day_stats))
     for site, source_stats in day_stats["by_source"].items():
-        print(
-            "  [{site}] 总: {total}  成功: {success}  重复: {duplicate}  失败: {failed}".format(
-                site=site,
-                **source_stats,
-            )
-        )
+        lines.append("  [{site}] 总: {total}  成功: {success}  重复: {duplicate}  失败: {failed}".format(site=site, **source_stats))
+    summary = "\n".join(lines)
+    print(summary)
+    return summary
 
 
 def crawl(limit, submit, stats):
@@ -776,7 +774,7 @@ def crawl_source(source, limit, submit, stats):
             listing_html = fetch_html_with_browser(source["url"])
         else:
             listing_html = fetch_html(session, source["url"])
-    except requests.RequestException as error:
+    except Exception as error:
         print(f"Could not load listing page {source['url']}: {error}")
         return
 
@@ -968,7 +966,8 @@ def main():
     else:
         crawl(max(args.limit, 1), args.submit, stats)
 
-    print_daily_summary(stats)
+    summary = print_daily_summary(stats)
+    send_telegram(summary)
 
 if __name__ == "__main__":
         main()

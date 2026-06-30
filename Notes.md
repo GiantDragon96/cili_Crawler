@@ -89,7 +89,7 @@ venv/bin/python crawler.py --all-sources --limit 3 --submit
 
 ```dotenv
 CRAWLER_IMAGE_PATH=images
-API=http://127.0.0.1:5000/api/sync/insertCili
+API=http://127.0.0.1:5050/api/sync/insertCili
 ```
 
 服务器：
