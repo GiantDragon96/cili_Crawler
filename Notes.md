@@ -93,6 +93,66 @@ rsync -av --password-file="$HOME/.rsync.pd" \
 rsyncuser@43.225.196.166::mm_caiji/sehuatang/img/
 ```
 
+## 本地 MacBook 流程
+
+```bash
+cd /Users/choonteck/Desktop/work/python
+source venv/bin/activate
+cat .env
+```
+
+本地 `.env` 通常为：
+
+```
+API=http://127.0.0.1:5050/api/sync/insertCili
+CRAWLER_IMAGE_PATH=images
+```
+
+### 运行本地 API
+
+```bash
+python app.py
+```
+
+### 在另一个终端启动 Chrome CDP
+
+```bash
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/chrome-sehuatang-profile" \
+  --new-window https://www.sehuatang.org/forum-104-1.html
+```
+
+### 检查 Chrome CDP
+
+```bash
+curl http://127.0.0.1:9222/json/version
+```
+
+### 运行一次爬虫
+
+```bash
+venv/bin/python crawler.py --all-sources --limit 1 --submit
+```
+
+### 本地 cron 测试，每 5 分钟
+
+```bash
+mkdir -p /Users/choonteck/Desktop/work/python/logs
+crontab -e
+```
+
+```
+*/5 * * * * cd /Users/choonteck/Desktop/work/python && /Users/choonteck/Desktop/work/python/venv/bin/python /Users/choonteck/Desktop/work/python/crawler.py --all-sources --limit 1 --submit >> /Users/choonteck/Desktop/work/python/logs/cron.log 2>&1
+```
+
+### 检查
+
+```bash
+crontab -l
+tail -f /Users/choonteck/Desktop/work/python/logs/cron.log
+```
+
 ---
 
 # English Version
@@ -188,4 +248,64 @@ tail -f /home/sysmgr/Crawler/logs/cron.log
 rsync -av --password-file="$HOME/.rsync.pd" \
 /home/Crawler/images/ \
 rsyncuser@43.225.196.166::mm_caiji/sehuatang/img/
+```
+
+## Local MacBook Flow
+
+```bash
+cd /Users/choonteck/Desktop/work/python
+source venv/bin/activate
+cat .env
+```
+
+Local `.env` usually:
+
+```
+API=http://127.0.0.1:5050/api/sync/insertCili
+CRAWLER_IMAGE_PATH=images
+```
+
+### Run local API
+
+```bash
+python app.py
+```
+
+### In another terminal, start Chrome CDP
+
+```bash
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir="$HOME/chrome-sehuatang-profile" \
+  --new-window https://www.sehuatang.org/forum-104-1.html
+```
+
+### Check Chrome CDP
+
+```bash
+curl http://127.0.0.1:9222/json/version
+```
+
+### Run crawler once
+
+```bash
+venv/bin/python crawler.py --all-sources --limit 1 --submit
+```
+
+### Local cron test every 5 min
+
+```bash
+mkdir -p /Users/choonteck/Desktop/work/python/logs
+crontab -e
+```
+
+```
+*/5 * * * * cd /Users/choonteck/Desktop/work/python && /Users/choonteck/Desktop/work/python/venv/bin/python /Users/choonteck/Desktop/work/python/crawler.py --all-sources --limit 1 --submit >> /Users/choonteck/Desktop/work/python/logs/cron.log 2>&1
+```
+
+### Check
+
+```bash
+crontab -l
+tail -f /Users/choonteck/Desktop/work/python/logs/cron.log
 ```

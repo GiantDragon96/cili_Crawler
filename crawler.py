@@ -523,21 +523,21 @@ def parse_hjd2048_thread(session, thread, tag):
         raise ValueError("could not find hjd2048 post content")
 
     content = post.get_text("\n", strip=True)
-    images = extract_images(post, thread["url"], limit=1)
-
-    if not images:
-        images = extract_images(soup, thread["url"], limit=1)
-        
-    cover_url = images[0] if images else ""
-    local_cover = download_image(session, cover_url, thread["thread_id"])
-    public_cover = to_public_image_path(local_cover)
-
     magnet_url = extract_magnet(html)
     if not magnet_url:
         magnet_url = download_hjd2048_torrent(session, soup, thread["url"])
 
     if not magnet_url:
         raise ValueError("no magnet URL found")
+
+    images = extract_images(post, thread["url"], limit=1)
+
+    if not images:
+        images = extract_images(soup, thread["url"], limit=1)
+
+    cover_url = images[0] if images else ""
+    local_cover = download_image(session, cover_url, thread["thread_id"])
+    public_cover = to_public_image_path(local_cover)
 
     return {
         "title": title,
