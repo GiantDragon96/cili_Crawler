@@ -67,12 +67,6 @@ cd ~/Crawler
 venv/bin/python crawler.py --all-sources --limit 1 --submit
 ```
 
-每个站点尝试抓取三条：
-
-```bash
-venv/bin/python crawler.py --all-sources --limit 3 --submit
-```
-
 ## 功能
 
 `crawler.py` 会从以下站点抓取资源：
@@ -120,18 +114,6 @@ venv/bin/python crawler.py --all-sources --limit 1
 
 ```bash
 venv/bin/python crawler.py --all-sources --limit 3
-```
-
-测试指定帖子：
-
-```bash
-venv/bin/python crawler.py --thread-url "帖子地址"
-```
-
-测试指定帖子并入库：
-
-```bash
-venv/bin/python crawler.py --thread-url "帖子地址" --submit
 ```
 
 检查 Python 语法：
@@ -216,7 +198,7 @@ ss -ltnp | grep -E "5900|6080"
 ```text
 http://43.225.196.186:6080/vnc.html
 ```
-ƒ√
+
 点击 `Connect`。
 
 ### 2. 启动真实 Chrome
