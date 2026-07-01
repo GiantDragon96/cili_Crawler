@@ -525,6 +525,9 @@ def parse_hjd2048_thread(session, thread, tag):
     content = post.get_text("\n", strip=True)
     images = extract_images(post, thread["url"], limit=1)
 
+    if not images:
+        images = extract_images(soup, thread["url"], limit=1)
+        
     cover_url = images[0] if images else ""
     local_cover = download_image(session, cover_url, thread["thread_id"])
     public_cover = to_public_image_path(local_cover)
@@ -592,8 +595,13 @@ def extract_images(post, thread_url, limit=2):
         return images
 
     for image in post.select("img[src]"):
-        src = image.get("src", "").strip()
-
+        src = (
+            image.get("data-original")
+            or image.get("data-src")
+            or image.get("file")
+            or image.get("src")
+            or ""
+        ).strip()
         if not src:
             continue
 
