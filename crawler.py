@@ -178,14 +178,30 @@ def fetch_html_with_browser(url):
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
         context = browser.contexts[0]
-        page = context.new_page()
+        parsed_url = urlparse(url)
+        target_path = parsed_url.path
+        page = None
 
-        page.goto(url, wait_until="domcontentloaded", timeout=120000)
+        for existing_page in context.pages:
+            existing_url = urlparse(existing_page.url)
+            if existing_url.netloc == parsed_url.netloc and existing_url.path == target_path:
+                page = existing_page
+                break
+
+        should_close_page = False
+        if page is None:
+            page = context.new_page()
+            should_close_page = True
+            page.goto(url, wait_until="domcontentloaded", timeout=120000)
+        else:
+            page.wait_for_load_state("domcontentloaded", timeout=120000)
+
         if sys.stdin.isatty():
             input("If Cloudflare/18 page appears, click through it, then press Enter here...")
 
         html = page.content()
-        page.close()
+        if should_close_page:
+            page.close()
         return html
 
 def extract_thread_links(html):
