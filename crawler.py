@@ -202,7 +202,10 @@ def fetch_html_with_browser(url):
             except Exception:
                 page.wait_for_timeout(3000)
         else:
-            page.wait_for_timeout(1000)
+            try:
+                page.wait_for_selector("tbody[id^='normalthread_'] a.xst[href]", timeout=10000)
+            except Exception:
+                page.wait_for_timeout(3000)
 
         if sys.stdin.isatty():
             input("If Cloudflare/18 page appears, click through it, then press Enter here...")
@@ -827,6 +830,11 @@ def crawl_source(source, limit, submit, stats):
     print(f"\nSource: {source['site']} | Tag: {source['tag']}")
     print(f"Found {len(threads)} thread links; checking up to {min(limit, len(threads))}.")
 
+    if not threads:
+        record_stat(stats, source["site"], "failed")
+        save_stats(stats)
+        return
+
     for thread in threads[:limit]:
         try:
             if source["site"] == "hjd2048":
@@ -947,7 +955,11 @@ def extract_sehuatang_thread_links(html, source_url):
     soup = BeautifulSoup(html, "html.parser")
     threads = {}
 
-    for link in soup.select("tbody[id^='normalthread_'] a.xst[href]"):
+    links = soup.select("tbody[id^='normalthread_'] a.xst[href]")
+    if not links:
+        links = soup.select("a.xst[href*='thread-'], a.xst[href*='tid='], a[href*='thread-'][href*='-1-1.html']")
+
+    for link in links:
         href = link.get("href", "")
         title = link.get_text(" ", strip=True)
 
