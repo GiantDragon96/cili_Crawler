@@ -174,6 +174,26 @@ def fetch_html(session, url):
     response.encoding = response.apparent_encoding
     return response.text
 
+def dismiss_age_gate(page, target_url):
+    try:
+        gate = page.query_selector("a.enter-btn")
+    except Exception:
+        gate = None
+
+    if not gate:
+        return False
+
+    print(f"Age-verification gate detected, clicking through: {target_url}")
+
+    try:
+        gate.click(timeout=5000)
+        page.wait_for_load_state("domcontentloaded", timeout=15000)
+        page.goto(target_url, wait_until="domcontentloaded", timeout=120000)
+    except Exception as error:
+        print(f"Could not click through age gate: {error}")
+
+    return True
+
 def fetch_html_with_browser(url, force_reload=False, wait_selector=None, screenshot_path=None):
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
@@ -197,6 +217,8 @@ def fetch_html_with_browser(url, force_reload=False, wait_selector=None, screens
             page.goto(url, wait_until="domcontentloaded", timeout=120000)
         else:
             page.wait_for_load_state("domcontentloaded", timeout=120000)
+
+        dismiss_age_gate(page, url)
 
         if wait_selector:
             try:
