@@ -180,6 +180,7 @@ def fetch_html_with_browser(url):
         context = browser.contexts[0]
         parsed_url = urlparse(url)
         target_path = parsed_url.path
+        is_thread_page = "thread-" in target_path or "viewthread" in parsed_url.query
         page = None
 
         for existing_page in context.pages:
@@ -192,9 +193,16 @@ def fetch_html_with_browser(url):
         if page is None:
             page = context.new_page()
             should_close_page = True
-            page.goto(url, wait_until="domcontentloaded", timeout=120000)
+
+        page.goto(url, wait_until="domcontentloaded", timeout=120000)
+
+        if is_thread_page:
+            try:
+                page.wait_for_selector("text=magnet:", timeout=10000)
+            except Exception:
+                page.wait_for_timeout(3000)
         else:
-            page.wait_for_load_state("domcontentloaded", timeout=120000)
+            page.wait_for_timeout(1000)
 
         if sys.stdin.isatty():
             input("If Cloudflare/18 page appears, click through it, then press Enter here...")
