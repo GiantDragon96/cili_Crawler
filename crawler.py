@@ -193,8 +193,11 @@ def fetch_html_with_browser(url):
         if page is None:
             page = context.new_page()
             should_close_page = True
-
-        page.goto(url, wait_until="domcontentloaded", timeout=120000)
+            page.goto(url, wait_until="domcontentloaded", timeout=120000)
+        elif is_thread_page:
+            page.goto(url, wait_until="domcontentloaded", timeout=120000)
+        else:
+            page.wait_for_load_state("domcontentloaded", timeout=120000)
 
         if is_thread_page:
             try:
