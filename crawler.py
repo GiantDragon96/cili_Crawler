@@ -180,7 +180,6 @@ def fetch_html_with_browser(url):
         context = browser.contexts[0]
         parsed_url = urlparse(url)
         target_path = parsed_url.path
-        is_thread_page = "thread-" in target_path or "viewthread" in parsed_url.query
         page = None
 
         for existing_page in context.pages:
@@ -194,21 +193,8 @@ def fetch_html_with_browser(url):
             page = context.new_page()
             should_close_page = True
             page.goto(url, wait_until="domcontentloaded", timeout=120000)
-        elif is_thread_page:
-            page.goto(url, wait_until="domcontentloaded", timeout=120000)
         else:
             page.wait_for_load_state("domcontentloaded", timeout=120000)
-
-        if is_thread_page:
-            try:
-                page.wait_for_selector("text=magnet:", timeout=10000)
-            except Exception:
-                page.wait_for_timeout(3000)
-        else:
-            try:
-                page.wait_for_selector("tbody[id^='normalthread_'] a.xst[href]", timeout=10000)
-            except Exception:
-                page.wait_for_timeout(3000)
 
         if sys.stdin.isatty():
             input("If Cloudflare/18 page appears, click through it, then press Enter here...")
@@ -493,6 +479,9 @@ def parse_thread(session, thread, tag=SOURCE_TAG):
 
     magnet_url = extract_magnet(html)
     if not magnet_url:
+        if "sehuatang.org" in thread["url"]:
+            Path("debug_sehuatang_no_magnet.html").write_text(html, encoding="utf-8")
+            print("Saved debug_sehuatang_no_magnet.html")
         raise ValueError("no magnet URL found")
 
     post = soup.select_one(".t_f, .pcb, .postmessage")
