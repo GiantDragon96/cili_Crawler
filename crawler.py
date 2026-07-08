@@ -830,11 +830,6 @@ def crawl_source(source, limit, submit, stats):
     print(f"\nSource: {source['site']} | Tag: {source['tag']}")
     print(f"Found {len(threads)} thread links; checking up to {min(limit, len(threads))}.")
 
-    if not threads:
-        record_stat(stats, source["site"], "failed")
-        save_stats(stats)
-        return
-
     for thread in threads[:limit]:
         try:
             if source["site"] == "hjd2048":
