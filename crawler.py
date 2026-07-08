@@ -174,7 +174,7 @@ def fetch_html(session, url):
     response.encoding = response.apparent_encoding
     return response.text
 
-def fetch_html_with_browser(url, force_reload=False, wait_selector=None):
+def fetch_html_with_browser(url, force_reload=False, wait_selector=None, screenshot_path=None):
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
         context = browser.contexts[0]
@@ -208,6 +208,13 @@ def fetch_html_with_browser(url, force_reload=False, wait_selector=None):
             input("If Cloudflare/18 page appears, click through it, then press Enter here...")
 
         html = page.content()
+
+        if screenshot_path:
+            try:
+                page.screenshot(path=screenshot_path, full_page=True)
+            except Exception as error:
+                print(f"Could not capture screenshot: {error}")
+
         if should_close_page:
             page.close()
         return html
@@ -470,12 +477,18 @@ def fetch_thread_html(session, thread):
     if "sehuatang.org" not in thread["url"]:
         return fetch_html(session, thread["url"])
 
+    thread_id = thread.get("thread_id", "unknown")
+    debug_html_path = Path(f"debug_sehuatang_no_magnet_{thread_id}.html")
+    debug_screenshot_path = Path(f"debug_sehuatang_no_magnet_{thread_id}.png")
+
     html = ""
     for attempt in range(3):
+        is_last_attempt = attempt == 2
         html = fetch_html_with_browser(
             thread["url"],
             force_reload=attempt > 0,
             wait_selector="text=magnet:" if attempt > 0 else None,
+            screenshot_path=str(debug_screenshot_path) if is_last_attempt else None,
         )
 
         if extract_magnet(html):
@@ -485,8 +498,8 @@ def fetch_thread_html(session, thread):
             print(f"Retrying Sehuatang thread for magnet ({attempt + 1}/2): {thread['url']}")
             time.sleep(2)
 
-    Path("debug_sehuatang_no_magnet.html").write_text(html, encoding="utf-8")
-    print("Saved debug_sehuatang_no_magnet.html")
+    debug_html_path.write_text(html, encoding="utf-8")
+    print(f"Saved {debug_html_path} and {debug_screenshot_path}")
     return html
 
 def parse_thread(session, thread, tag=SOURCE_TAG):
