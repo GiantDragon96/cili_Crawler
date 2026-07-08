@@ -174,7 +174,7 @@ def fetch_html(session, url):
     response.encoding = response.apparent_encoding
     return response.text
 
-def fetch_html_with_browser(url):
+def fetch_html_with_browser(url, force_reload=False, wait_selector=None):
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
         context = browser.contexts[0]
@@ -193,8 +193,16 @@ def fetch_html_with_browser(url):
             page = context.new_page()
             should_close_page = True
             page.goto(url, wait_until="domcontentloaded", timeout=120000)
+        elif force_reload:
+            page.goto(url, wait_until="domcontentloaded", timeout=120000)
         else:
             page.wait_for_load_state("domcontentloaded", timeout=120000)
+
+        if wait_selector:
+            try:
+                page.wait_for_selector(wait_selector, timeout=10000)
+            except Exception:
+                page.wait_for_timeout(3000)
 
         if sys.stdin.isatty():
             input("If Cloudflare/18 page appears, click through it, then press Enter here...")
@@ -458,11 +466,31 @@ def to_public_image_path(local_path):
 
     return f"/sehuatang/img/{Path(local_path).name}"
 
+def fetch_thread_html(session, thread):
+    if "sehuatang.org" not in thread["url"]:
+        return fetch_html(session, thread["url"])
+
+    html = ""
+    for attempt in range(3):
+        html = fetch_html_with_browser(
+            thread["url"],
+            force_reload=attempt > 0,
+            wait_selector="text=magnet:" if attempt > 0 else None,
+        )
+
+        if extract_magnet(html):
+            return html
+
+        if attempt < 2:
+            print(f"Retrying Sehuatang thread for magnet ({attempt + 1}/2): {thread['url']}")
+            time.sleep(2)
+
+    Path("debug_sehuatang_no_magnet.html").write_text(html, encoding="utf-8")
+    print("Saved debug_sehuatang_no_magnet.html")
+    return html
+
 def parse_thread(session, thread, tag=SOURCE_TAG):
-    if "sehuatang.org" in thread["url"]:
-        html = fetch_html_with_browser(thread["url"])
-    else:
-        html = fetch_html(session, thread["url"])
+    html = fetch_thread_html(session, thread)
 
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text("\n", strip=True)
@@ -479,9 +507,6 @@ def parse_thread(session, thread, tag=SOURCE_TAG):
 
     magnet_url = extract_magnet(html)
     if not magnet_url:
-        if "sehuatang.org" in thread["url"]:
-            Path("debug_sehuatang_no_magnet.html").write_text(html, encoding="utf-8")
-            print("Saved debug_sehuatang_no_magnet.html")
         raise ValueError("no magnet URL found")
 
     post = soup.select_one(".t_f, .pcb, .postmessage")
@@ -815,12 +840,29 @@ def crawl_source(source, limit, submit, stats):
         threads = extract_hjd2048_thread_links(listing_html, source["url"])
     elif source["site"] == "sehuatang":
         threads = extract_sehuatang_thread_links(listing_html, source["url"])
+        if not threads:
+            for attempt in range(2):
+                Path("debug_sehuatang_listing.html").write_text(listing_html, encoding="utf-8")
+                print(f"Retrying Sehuatang listing ({attempt + 1}/2)")
+                time.sleep(2)
+                listing_html = fetch_html_with_browser(
+                    source["url"],
+                    force_reload=True,
+                    wait_selector="tbody[id^='normalthread_'] a.xst[href]",
+                )
+                threads = extract_sehuatang_thread_links(listing_html, source["url"])
+                if threads:
+                    break
     else:
         print(f"Unknown site: {source['site']}")
         return
 
     print(f"\nSource: {source['site']} | Tag: {source['tag']}")
     print(f"Found {len(threads)} thread links; checking up to {min(limit, len(threads))}.")
+
+    if source["site"] == "sehuatang" and not threads:
+        Path("debug_sehuatang_listing.html").write_text(listing_html, encoding="utf-8")
+        print("Saved debug_sehuatang_listing.html")
 
     for thread in threads[:limit]:
         try:
