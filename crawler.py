@@ -114,7 +114,7 @@ def send_telegram(message):
     try:
         requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": message},
+            json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
             timeout=10,
         )
     except requests.RequestException as error:
@@ -788,7 +788,7 @@ def print_daily_summary(stats):
     now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     day_stats = stats.get(today_key, {"total": 0, "success": 0, "duplicate": 0, "failed": 0, "by_source": {}})
-    lines = [f"\n今日统计 ({now_text})"]
+    lines = ["\n<b>磁力</b>", f"今日统计 ({now_text})"]
     lines.append("  总计: {total}  成功: {success}  重复: {duplicate}  失败: {failed}".format(**day_stats))
 
     for site, source_stats in day_stats["by_source"].items():
