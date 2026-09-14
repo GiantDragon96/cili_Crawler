@@ -18,10 +18,15 @@ load_dotenv()
 import requests
 from bs4 import BeautifulSoup
 
+# 141 rotates domains (141love.net -> 141-161.net). Keep it in one place and
+# let .env override it so the next rotation does not need a code change.
+LOVE_DOMAIN = os.getenv("LOVE_DOMAIN", "141-161.net").strip()
+LOVE_BASE = f"https://{LOVE_DOMAIN}"
+
 SOURCES = [
     {
         "site": "141love",
-        "url": "https://141love.net/forum.php?mod=forumdisplay&fid=271&filter=typeid&typeid=557",
+        "url": f"{LOVE_BASE}/forum.php?mod=forumdisplay&fid=271&filter=typeid&typeid=557",
         "tag": "动漫精品",
     },
     {
@@ -62,7 +67,7 @@ SOURCES = [
 ]
 
 SOURCE_URL = (
-    "https://141love.net/forum.php?"
+    f"{LOVE_BASE}/forum.php?"
     "mod=forumdisplay&fid=271&filter=typeid&typeid=557"
 )
 SOURCE_TAG = "动漫精品"
@@ -152,7 +157,7 @@ def build_session(site=None):
     elif site == "hjd2048":
         session.headers["Referer"] = "https://hjd2048.com/2048/"
     elif site == "141love":
-        session.headers["Referer"] = "https://141love.net/"
+        session.headers["Referer"] = f"{LOVE_BASE}/"
 
     if site == "141love":
         cookie = os.getenv("cookie1", "").strip()
@@ -164,7 +169,15 @@ def build_session(site=None):
         cookie = os.getenv("cookie1", "").strip()
 
     if cookie:
-        session.headers["Cookie"] = cookie
+        # Load into the cookie jar rather than session.headers: requests drops a
+        # manually set Cookie header on every redirect (resolve_redirects calls
+        # headers.pop("Cookie")), which silently deauthenticates us the moment a
+        # source starts redirecting to a new domain.
+        for part in cookie.split(";"):
+            if "=" not in part:
+                continue
+            name, value = part.split("=", 1)
+            session.cookies.set(name.strip(), value.strip())
 
     return session
 
