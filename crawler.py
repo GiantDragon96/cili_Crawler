@@ -23,6 +23,11 @@ from bs4 import BeautifulSoup
 LOVE_DOMAIN = os.getenv("LOVE_DOMAIN", "141-161.net").strip()
 LOVE_BASE = f"https://{LOVE_DOMAIN}"
 
+# Sites that serve a JS/Cloudflare challenge and can only be read through the
+# CDP browser. hjd2048 now serves /_guard/auto.js, so plain requests only ever
+# gets a 39-byte bootstrap stub back.
+BROWSER_SITES = {"sehuatang", "hjd2048"}
+
 SOURCES = [
     {
         "site": "141love",
@@ -217,7 +222,14 @@ def fetch_html_with_browser(url, force_reload=False, wait_selector=None, screens
 
         for existing_page in context.pages:
             existing_url = urlparse(existing_page.url)
-            if existing_url.netloc == parsed_url.netloc and existing_url.path == target_path:
+            # Match the query too: the hjd2048 boards differ only by ?fid=N on a
+            # shared path, so matching on path alone would hand back another
+            # board's already-loaded tab.
+            if (
+                existing_url.netloc == parsed_url.netloc
+                and existing_url.path == target_path
+                and existing_url.query == parsed_url.query
+            ):
                 page = existing_page
                 break
 
@@ -325,6 +337,32 @@ def download_image(session, image_url, thread_id, referer_url=""):
         f.write(response.content)
 
     return str(file_path)
+
+def fetch_bytes_with_browser(url, referer_url="", accept="*/*"):
+    """GET raw bytes from inside the CDP browser, so challenge cookies apply."""
+    with sync_playwright() as p:
+        browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
+        context = browser.contexts[0]
+        page = context.new_page()
+
+        try:
+            if referer_url:
+                page.goto(referer_url, wait_until="domcontentloaded", timeout=120000)
+
+            headers = {"Accept": accept}
+            if referer_url:
+                headers["Referer"] = referer_url
+
+            response = page.request.get(url, headers=headers, timeout=120000)
+
+            if not response.ok:
+                print(f"Could not download {url}: browser status {response.status}")
+                return b""
+
+            return response.body()
+        finally:
+            page.close()
+
 
 def download_image_with_browser(image_url, thread_id, referer_url=""):
     if not image_url:
@@ -475,9 +513,11 @@ def download_hjd2048_torrent(session, soup, thread_url):
         return ""
 
     torrent_url = urljoin(thread_url, link.get("href"))
-    response = session.get(torrent_url, timeout=30)
-    response.raise_for_status()
-    content = response.content
+    content = fetch_bytes_with_browser(
+        torrent_url,
+        referer_url=thread_url,
+        accept="application/x-bittorrent,*/*",
+    )
 
     if not content.startswith(b"d"):
         return ""
@@ -589,7 +629,7 @@ def parse_thread(session, thread, tag=SOURCE_TAG):
     }
 
 def parse_hjd2048_thread(session, thread, tag):
-    html = fetch_html(session, thread["url"])
+    html = fetch_html_with_browser(thread["url"])
     soup = BeautifulSoup(html, "html.parser")
 
     title_element = soup.select_one("#subject_tpc")
@@ -628,7 +668,9 @@ def parse_hjd2048_thread(session, thread, tag):
         images = extract_images(soup, thread["url"], limit=1)
 
     cover_url = images[0] if images else ""
-    local_cover = download_image(session, cover_url, thread["thread_id"])
+    local_cover = download_image_with_browser(
+        cover_url, thread["thread_id"], thread["url"]
+    )
     public_cover = to_public_image_path(local_cover)
 
     return {
@@ -874,12 +916,16 @@ def crawl_source(source, limit, submit, stats):
     session = build_session(source["site"])
 
     try:
-        if source["site"] == "sehuatang":
+        if source["site"] in BROWSER_SITES:
             listing_html = fetch_html_with_browser(source["url"])
         else:
             listing_html = fetch_html(session, source["url"])
     except Exception as error:
         print(f"Could not load listing page {source['url']}: {error}")
+        # Record it, otherwise a source that dies at the listing stage vanishes
+        # from the daily summary entirely instead of showing up as broken.
+        record_stat(stats, source["site"], "failed")
+        save_stats(stats)
         return
 
     if source["site"] == "141love":
@@ -911,6 +957,12 @@ def crawl_source(source, limit, submit, stats):
     if source["site"] == "sehuatang" and not threads:
         Path("debug_sehuatang_listing.html").write_text(listing_html, encoding="utf-8")
         print("Saved debug_sehuatang_listing.html")
+
+    if not threads:
+        print(f"No thread links found for {source['site']} at {source['url']}")
+        record_stat(stats, source["site"], "failed")
+        save_stats(stats)
+        return
 
     for thread in threads[:limit]:
         try:
