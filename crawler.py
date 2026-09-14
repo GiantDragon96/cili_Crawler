@@ -192,6 +192,66 @@ def fetch_html(session, url):
     response.encoding = response.apparent_encoding
     return response.text
 
+def looks_like_challenge(html):
+    """True while the page is still the challenge bootstrap, not real content.
+
+    hjd2048 serves a ~39 byte stub that loads /_guard/auto.js, which sets a
+    cookie and reloads the page; Cloudflare does the same with its interstitial.
+    Both land well after domcontentloaded.
+    """
+    if not html:
+        return True
+
+    if len(html) < 2000 and "_guard/" in html:
+        return True
+
+    return any(
+        marker in html
+        for marker in ("Just a moment", "Checking your browser", "cf-browser-verification")
+    )
+
+
+def wait_past_challenge(page, ready=None, timeout_ms=45000, poll_ms=1000):
+    """Poll page content until the challenge clears, or the budget runs out.
+
+    Reading content() straight after navigation captures the stub. Interactive
+    runs only ever got away with that because the operator prompt happened to
+    pause here; under cron there is no pause, so the wait has to be explicit.
+    """
+    deadline = time.time() + timeout_ms / 1000
+    html = ""
+
+    while True:
+        try:
+            html = page.content()
+        except Exception:
+            # The guard's reload destroys the execution context mid-read.
+            html = ""
+
+        if html and not looks_like_challenge(html) and (ready is None or ready(html)):
+            return html
+
+        if time.time() >= deadline:
+            return html
+
+        page.wait_for_timeout(poll_ms)
+
+
+def confirm_browser_ready():
+    """Ask the operator to clear any challenge, at most once per run.
+
+    Under cron there is no tty, so this is skipped entirely and the run
+    proceeds on whatever cookies the persistent Chrome profile already holds.
+    """
+    global BROWSER_VERIFIED
+
+    if BROWSER_VERIFIED or not sys.stdin.isatty():
+        return
+
+    input("If a Cloudflare/18 page appears, clear it in the browser, then press Enter (asked once per run)...")
+    BROWSER_VERIFIED = True
+
+
 def dismiss_age_gate(page, target_url):
     try:
         gate = page.query_selector("a.enter-btn")
@@ -212,7 +272,7 @@ def dismiss_age_gate(page, target_url):
 
     return True
 
-def fetch_html_with_browser(url, force_reload=False, wait_selector=None, screenshot_path=None):
+def fetch_html_with_browser(url, force_reload=False, wait_selector=None, screenshot_path=None, ready=None):
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp("http://127.0.0.1:9222")
         context = browser.contexts[0]
@@ -251,10 +311,9 @@ def fetch_html_with_browser(url, force_reload=False, wait_selector=None, screens
             except Exception:
                 page.wait_for_timeout(3000)
 
-        if sys.stdin.isatty():
-            input("If Cloudflare/18 page appears, click through it, then press Enter here...")
+        confirm_browser_ready()
 
-        html = page.content()
+        html = wait_past_challenge(page, ready=ready)
 
         if screenshot_path:
             try:
@@ -389,8 +448,7 @@ def download_image_with_browser(image_url, thread_id, referer_url=""):
 
             if referer_url:
                 page.goto(referer_url, wait_until="networkidle", timeout=120000)
-                if sys.stdin.isatty():
-                    input("If Cloudflare/18 page appears, click through it, then press Enter here...")
+                confirm_browser_ready()
                 response = page.request.get(
                     image_url,
                     headers={
@@ -912,12 +970,22 @@ def log_parsed_payload(payload):
     with PARSED_LOG_FILE.open("w", encoding="utf-8") as log_file:
         json.dump(records, log_file, ensure_ascii=False, indent=2)
 
+LISTING_EXTRACTORS = {
+    "hjd2048": lambda html, url: extract_hjd2048_thread_links(html, url),
+    "sehuatang": lambda html, url: extract_sehuatang_thread_links(html, url),
+}
+
+
 def crawl_source(source, limit, submit, stats):
     session = build_session(source["site"])
 
     try:
         if source["site"] in BROWSER_SITES:
-            listing_html = fetch_html_with_browser(source["url"])
+            extractor = LISTING_EXTRACTORS[source["site"]]
+            listing_html = fetch_html_with_browser(
+                source["url"],
+                ready=lambda html: bool(extractor(html, source["url"])),
+            )
         else:
             listing_html = fetch_html(session, source["url"])
     except Exception as error:
