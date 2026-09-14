@@ -1,4 +1,5 @@
 import argparse
+import fcntl
 import json
 import os
 import random
@@ -185,6 +186,87 @@ def build_session(site=None):
             session.cookies.set(name.strip(), value.strip())
 
     return session
+
+LOGIN_ATTEMPTED = False
+
+
+def needs_login(html):
+    """True when 141 is serving the guest view instead of the post."""
+    if not html:
+        return False
+
+    return (
+        "discuz_uid = '0'" in html
+        or "閱讀權限高於" in html
+        or "用户登录" in html
+        or "用戶登錄" in html
+    )
+
+
+def login_141love(session):
+    """Log in with .env credentials, leaving auth cookies on the session.
+
+    Discuz issues a ~30 day cookie, so this only fires once the stored cookie1
+    has lapsed. Attempted at most once per run: a permission wall can also mean
+    the account's read level is genuinely too low, and retrying cannot fix that.
+    """
+    global LOGIN_ATTEMPTED
+
+    if LOGIN_ATTEMPTED:
+        return False
+
+    LOGIN_ATTEMPTED = True
+
+    username = os.getenv("LOVE_USERNAME", "").strip()
+    password = os.getenv("LOVE_PASSWORD", "").strip()
+
+    if not (username and password):
+        print("141 session has lapsed and LOVE_USERNAME/LOVE_PASSWORD are not set")
+        return False
+
+    login_page = f"{LOVE_BASE}/member.php?mod=logging&action=login"
+
+    try:
+        form = BeautifulSoup(
+            session.get(login_page, timeout=30).text, "html.parser"
+        ).select_one("form[name='login']")
+
+        if not form:
+            print("Could not find the 141 login form")
+            return False
+
+        # formhash and the loginhash in the action are both per-page-load.
+        fields = {
+            element.get("name"): element.get("value") or ""
+            for element in form.select("input[name]")
+        }
+        fields.update(
+            {
+                "username": username,
+                "password": password,
+                "questionid": "0",
+                "answer": "",
+                "cookietime": "2592000",
+            }
+        )
+
+        session.post(
+            urljoin(login_page, form.get("action", "")),
+            data=fields,
+            headers={"Referer": login_page},
+            timeout=30,
+        ).raise_for_status()
+
+        if needs_login(session.get(f"{LOVE_BASE}/forum.php", timeout=30).text):
+            print("141 login was rejected; check LOVE_USERNAME/LOVE_PASSWORD")
+            return False
+
+        print("Logged in to 141 with stored credentials")
+        return True
+    except requests.RequestException as error:
+        print(f"141 login failed: {error}")
+        return False
+
 
 def fetch_html(session, url):
     response = session.get(url, timeout=30)
@@ -608,7 +690,13 @@ def to_public_image_path(local_path):
 
 def fetch_thread_html(session, thread):
     if "sehuatang.org" not in thread["url"]:
-        return fetch_html(session, thread["url"])
+        html = fetch_html(session, thread["url"])
+
+        # A lapsed cookie looks exactly like a guest visit; re-auth and retry.
+        if LOVE_DOMAIN in thread["url"] and needs_login(html) and login_141love(session):
+            html = fetch_html(session, thread["url"])
+
+        return html
 
     thread_id = thread.get("thread_id", "unknown")
     debug_html_path = Path(f"debug_sehuatang_no_magnet_{thread_id}.html")
@@ -768,17 +856,61 @@ def extract_sub_tags(title, content):
 
     return ",".join(tags) or "BT下载"
 
+RUN_LOCK_FILE = Path("logs/crawler.lock")
+PARSED_LOG_LIMIT = 2000
+
+
+def read_json_file(path, default):
+    """Read JSON, quarantining the file rather than failing if it is corrupt."""
+    if not path.exists() or path.stat().st_size == 0:
+        return default
+
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        quarantine = path.with_name(path.name + ".corrupt")
+        path.replace(quarantine)
+        print(f"{path} was unreadable ({error}); moved to {quarantine}, starting fresh")
+        return default
+
+
+def write_json_file(path, data):
+    """Write through a temp file so a crash can never leave a half-written file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+
+    with tmp.open("w", encoding="utf-8") as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=2)
+
+    tmp.replace(path)
+
+
+def acquire_run_lock():
+    """Hold an exclusive lock for this run, or return None if one is running.
+
+    Every logs/*.json update is a read-modify-write. Two overlapping runs
+    clobber each other, which is how the summary managed to report a
+    *decreasing* failure count between two runs 23 seconds apart.
+    """
+    RUN_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    handle = RUN_LOCK_FILE.open("w")
+
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+
+    return handle
+
+
 def load_processed():
-    if not PROCESSED_FILE.exists():
-        return set()
-    return set(json.loads(PROCESSED_FILE.read_text(encoding="utf-8")))
+    return set(read_json_file(PROCESSED_FILE, []))
 
 
 def save_processed(processed):
-    PROCESSED_FILE.write_text(
-        json.dumps(sorted(processed), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    write_json_file(PROCESSED_FILE, sorted(processed))
 
 def extract_images(post, thread_url, limit=2):
     images = []
@@ -841,18 +973,11 @@ def submit_payload(session, payload):
 
 
 def load_stats():
-    if not STATS_FILE.exists() or STATS_FILE.stat().st_size == 0:
-        return {}
-
-    with STATS_FILE.open("r", encoding="utf-8") as stats_file:
-        return json.load(stats_file)
+    return read_json_file(STATS_FILE, {})
 
 
 def save_stats(stats):
-    STATS_FILE.parent.mkdir(parents=True, exist_ok=True)
-
-    with STATS_FILE.open("w", encoding="utf-8") as stats_file:
-        json.dump(stats, stats_file, ensure_ascii=False, indent=2)
+    write_json_file(STATS_FILE, stats)
 
 
 def record_stat(stats, site, status):
@@ -952,23 +1077,24 @@ def crawl(limit, submit, stats):
         time.sleep(random.uniform(2, 5))
 
 def log_parsed_payload(payload):
-    PARSED_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    """Append to the parsed-payload log. Never raises.
 
-    records = []
-
-    if PARSED_LOG_FILE.exists() and PARSED_LOG_FILE.stat().st_size > 0:
-        with PARSED_LOG_FILE.open("r", encoding="utf-8") as log_file:
-            records = json.load(log_file)
-
-    records.append(
-        {
-            "logged_at": datetime.now().isoformat(timespec="seconds"),
-            "payload": payload,
-        }
-    )
-
-    with PARSED_LOG_FILE.open("w", encoding="utf-8") as log_file:
-        json.dump(records, log_file, ensure_ascii=False, indent=2)
+    A JSONDecodeError from a corrupt log used to surface as ValueError and get
+    caught by the caller's except clause, marking a perfectly good record as
+    failed. Bookkeeping must not be able to fail the crawl.
+    """
+    try:
+        records = read_json_file(PARSED_LOG_FILE, [])
+        records.append(
+            {
+                "logged_at": datetime.now().isoformat(timespec="seconds"),
+                "payload": payload,
+            }
+        )
+        # Keep it bounded; it had grown past 7MB, which is what corrupted it.
+        write_json_file(PARSED_LOG_FILE, records[-PARSED_LOG_LIMIT:])
+    except Exception as error:
+        print(f"Could not write parsed log: {error}")
 
 LISTING_EXTRACTORS = {
     "hjd2048": lambda html, url: extract_hjd2048_thread_links(html, url),
@@ -1201,6 +1327,12 @@ def main():
     help="crawl all configured source URLs",
     )
     args = parser.parse_args()
+
+    run_lock = acquire_run_lock()
+    if run_lock is None:
+        print("Another crawler run is still in progress; exiting.")
+        return
+
     stats = load_stats()
 
     if args.thread_url:
