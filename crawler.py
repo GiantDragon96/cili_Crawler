@@ -98,6 +98,7 @@ SIZE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 MAKER_PATTERN = re.compile(r"\[([^\[\]]+)\]")
+HJD_LOGIN_MARKER = re.compile(r"登录|登錄|請登入|请登入|member\.php|尚未登錄|尚未登录")
 BROWSER_VERIFIED = False
 
 REQUIRED_FIELDS = {
@@ -648,9 +649,17 @@ def torrent_bytes_to_magnet(torrent_bytes):
 
 
 def download_hjd2048_torrent(session, soup, thread_url):
+    """Derive a magnet from the .torrent attachment, or raise saying why not.
+
+    Three very different situations used to collapse into one empty string and
+    surface as a generic "no magnet URL found": the thread having no attachment
+    at all, the download failing, and the server returning a page (usually a
+    login wall) instead of a torrent. Name them so the log is diagnosable.
+    """
     link = soup.select_one("a[href*='action=download'][href*='aid=']")
+
     if not link:
-        return ""
+        raise ValueError("no inline magnet, and the thread has no torrent attachment")
 
     torrent_url = urljoin(thread_url, link.get("href"))
     content = fetch_bytes_with_browser(
@@ -659,8 +668,16 @@ def download_hjd2048_torrent(session, soup, thread_url):
         accept="application/x-bittorrent,*/*",
     )
 
+    if not content:
+        raise ValueError(f"torrent download returned nothing: {torrent_url}")
+
     if not content.startswith(b"d"):
-        return ""
+        head = content[:160].decode("utf-8", "replace")
+        reason = "login required" if HJD_LOGIN_MARKER.search(head) else "not a torrent"
+        raise ValueError(
+            f"torrent download gave {len(content)} bytes, {reason} "
+            f"({torrent_url}): {head[:100]!r}"
+        )
 
     return torrent_bytes_to_magnet(content)
 
